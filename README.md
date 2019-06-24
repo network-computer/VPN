@@ -27,6 +27,7 @@ Update packages
 Install dependencies
 ```
 # pkg install iperf netstat
+# pkg install openvpn
 ```
 
 ## Scheme
@@ -83,9 +84,9 @@ pflog_flags=""                            # additional flags for pflogd startup
 pflogd_enable="YES"
 pfsync_enable="YES"
 
-
-
-
+# openvpn
+openvpn_enable="YES"
+openvpn_config="/usr/local/etc/openvpn/openvpn.conf"
 ```
 You have to replace xn0, xn1 with the correct device for your cards, and the addresses with the proper ones.
 defaultrouter is needed only if you are not using dhpc for WAN connection.
@@ -221,9 +222,24 @@ Here, we note that file `/var/log/pflog` would be automatically created as follo
 -rw-------  1 root  wheel  3832 Jul 13 17:45 /var/log/pflog
 ```
 
+
+## To check for syntax error
+```
+# service pf check
+
+OR
+
+/etc/rc.d/pf check
+
+OR
+
+# pfctl -n -f /usr/local/etc/pf.conf
+````
+
 ## Netstat check
 #### xn0
 ```
+
 # netstat -w1d -I xn0: 
                     input (age0) output 
 packets     errs     idrops    bytes      packets        errs    bytes    colls 
@@ -259,5 +275,154 @@ Swap: 2048M Total, 2048M Free
 ## Deploy NGINX with docker
 ```bash
 sudo docker build . -t frc-nginx
-sudo docker run frc-nginx
+sudo docker run --name frc-nginx -d -p 8080:80 -p 80:80 -p 443:443 frc-nginx
 ```
+
+## Preparing certificates
+Setup keys and certificates
+```
+mkdir /root/sslCA
+chmod 700 /root/sslCA
+```
+This needs to be put in `/etc/ssl/openssl.cnf` as
+```
+dir            = /root/sslCA    # Where everything is kept
+````
+
+OpenSSL also requires some folders and a serial number
+```
+cd /root/sslCA
+mkdir certs private newcerts
+echo 1024 > serial
+touch index.txt
+```
+
+Then, let’s generate the 10 year Certificate Authority which will be used to sign the certificates
+
+```
+openssl req -new -x509 -days 3650 -extensions v3_ca -keyout private/cakey.pem -out cacert.pem -config /etc/ssl/openssl.cnf
+```
+Generate a request for a certificate
+```
+openssl req -new -nodes -out server.req -keyout private/server.key -config /etc/ssl/openssl.cnf
+openssl ca -out server.crt -infiles server.req -config /etc/ssl/openssl.cnf
+```
+> Note that while you can put almost anything in the fields when asked, you will need at least a common name for each, and the organization must be the same for both certificates. Answer yes [y] where asked.
+
+> If you want to use password-based authentication for the clients, these are all the certificates you need. But if you want certificate based authentication, then each client will also need a certificate. Just create another request and certificate in the same manner, but with “server” replaced by “client”. You will need to copy those files (and the CA cert) to the client later.
+
+```
+openssl dhparam -out dh1024.pem 1024
+```
+
+## Configure OpenVPN
+
+We based our config on the sample file, so copy it first.
+```
+cp vpn-server.conf /usr/local/etc/openvpn/openvpn.conf
+```
+
+If you want the client to use the VPN as the default gateway, i.e. not only to access server resources, but perhaps also to surf the web, you will need to put these two lines either in the server or client config. You will also need some routing, see below.
+```
+push "redirect-gateway def1 bypass.dhcp"
+push "dhcp-option DNS 8.8.8.8"
+```
+
+And then, ignition:
+```
+/usr/local/etc/rc.d/openvpn starts
+```
+
+And then, enable packet forwarding, enable pf as our firewall, and start it
+```
+sysctl net.inet.ip.forwarding=1
+pfctl -ef /etc/pf.conf
+```
+
+## Configuring Clients
+Install the openvpn client.
+
+Edit the client.ovpn file slightly (it needs to be done as administrator). Look for the following lines and edit accordingly.
+```
+remote 1.2.3.4 # put your server IP or name here
+# the certificate files from the server (separate client certificate, not server)
+ca   ca.crt
+cert client.crt
+key client.key
+# remember to keep these lines commented out if they appear
+;ns-cert-type server
+;remote-cert-tls server
+```
+
+At the end add
+```
+#this line sets the VPN as default gateway
+redirect-gateway def1
+#these lines stroke Windows 8 the right way
+route-method exe
+route-delay 5
+route-metric 550
+```
+
+To start the connection we need to run (as administrator) from the config directory
+```
+sudo openvpn --config client.ovpn
+```
+## PF firewall Commands
+
+The commands are as follows. Be careful you might be disconnected from your server over ssh based session:
+
+Start PF
+```
+# service pf start
+````
+
+Stop PF
+```
+# service pf stop
+```
+
+Check PF for syntax error
+```
+# service pf check
+```
+
+Restart PF
+```
+# service pf restart
+```
+
+See PF status
+```
+# service pf status
+```
+
+Show PF rules information
+```
+# pfctl -s rules
+```
+
+Show verbose output for each rule
+```
+# pfctl -v -s rules
+```
+
+How to disable PF from the CLI
+```
+# pfctl -d
+```
+
+How to enable PF from the CLI
+```
+# pfctl -e
+```
+
+How to flush ALL PF rules/nat/tables from the CLI
+```
+# pfctl -F all
+```
+
+## References
+
+https://www.cyberciti.biz/faq/how-to-set-up-a-firewall-with-pf-on-freebsd-to-protect-a-web-server/
+https://gundersen.net/openvpn-server-on-freebsd-with-pf-firewall/
