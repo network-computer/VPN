@@ -169,8 +169,18 @@ ext_if = "xn0"
 int_addr = "192.168.150.1"             # Internal IPv4 address (i.e., gateway for private network)
 int_network = "192.168.0.0/16"         # Internal IPv4 networkqi
 
+################OPENVPN############################
+# default openvpn settings for the client network
+vpnclients = "10.8.0.0/24"
+# put your tunnel interface here, it is usually tun0
+vpnint = "tun0"
+# OpenVPN by default runs on udp port 1194
+udpopen = "{1194}"
+icmptypes = "{echoreq, unreach}"
+###################################################
+
 # Ports we want to allow access to from the outside world on our local system (ext_if)
-tcp_services = "{ 22, 80 }"
+tcp_services = "{ 80 }"
 
 # ping requests
 icmp_types = "echoreq"
@@ -188,8 +198,10 @@ scrub in all
 
 # NAT traffic from internal network to external network through external interface
 nat on $ext_if from $int_if:network to any -> ($ext_if)
+nat on $ext_if inet from $vpnclients to any -> $ext_if
 
 ### Filters ###
+
 # Permit keep-state packets for UDP and TCP on external interfaces
 pass out quick on $ext_if proto udp all keep state
 pass out quick on $ext_if proto tcp all modulate state flags S/SA
@@ -205,9 +217,12 @@ pass in quick on $int_if inet from $int_network to any keep state
 # Permit and log all packets from clients in private network through NAT
 pass in quick log on $int_if all
 
-# Pass any other packets
-pass in all
+# Block everything
+pass in log all
 pass out all
+
+pass in on $ext_if proto udp from any to $ext_if port $udpopen 
+pass in on $vpnint from any to any
 ```
 
 Note that this file also defines filter rules which is useful or mandatory to provide the network to users. Eliminate filter section just by this part:
